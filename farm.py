@@ -1,7 +1,6 @@
 import sys
 import os
 import pygame
-import math
 import requests
 
 
@@ -39,22 +38,6 @@ def get_coordinates(address):
     return float(toponym_longitude), float(toponym_lattitude)
 
 
-def lonlat_distance(a, b):
-    degree_to_meters_factor = 111 * 1000
-    a_lon, a_lat = a
-    b_lon, b_lat = b
-
-    radians_lattitude = math.radians((a_lat + b_lat) / 2.)
-    lat_lon_factor = math.cos(radians_lattitude)
-
-    dx = abs(a_lon - b_lon) * degree_to_meters_factor * lat_lon_factor
-    dy = abs(a_lat - b_lat) * degree_to_meters_factor
-
-    distance = math.sqrt(dx * dx + dy * dy)
-
-    return distance
-
-
 def find_businesses(ll, spn, request, locale="ru_RU"):
     search_api_server = "https://search-maps.yandex.ru/v1/"
     api_key = 'dda3ddba-c9ea-4ead-9010-f43fbc15c6e3'
@@ -78,12 +61,6 @@ def find_businesses(ll, spn, request, locale="ru_RU"):
 
     organizations = json_response["features"]
     return organizations
-
-
-def find_business(ll, spn, request, locale="ru_RU"):
-    orgs = find_businesses(ll, spn, request, locale=locale)
-    if len(orgs):
-        return orgs[0]
     
 
 def show_map(ll_spn=None, map_type="map", add_params=None):
@@ -124,31 +101,36 @@ def show_map(ll_spn=None, map_type="map", add_params=None):
 def main():
     toponym_to_find = " ".join(sys.argv[1:])
 
+    if not toponym_to_find:
+        print('No data')
+        exit(1)
+
     lat, lon = get_coordinates(toponym_to_find)
     address_ll = f"{lat},{lon}"
-    span = "0.005,0.005"
 
-    organization = find_business(address_ll, span, "аптека")
-    point = organization["geometry"]["coordinates"]
-    org_lat = float(point[0])
-    org_lon = float(point[1])
-    point_param = f"pt={org_lat},{org_lon},pm2dgl"
+    delta = 0.01
+    organizations = []
+    while delta < 100 and len(organizations) < 10:
+        delta *= 2.0
+        span = f"{delta},{delta}"
+        organizations = find_businesses(address_ll, span, "аптека")
 
-    show_map(f"ll={address_ll}&spn={span}", "map", add_params=point_param)
+    farmacies_with_time = []
+    for org in organizations:
+        point = org["geometry"]["coordinates"]
+        hours = org["properties"]["CompanyMetaData"].get("Hours", None)
+        if hours:
+            available = hours["Availabilities"][0]
+            is_24x7 = available.get("Everyday", False) and available.get("TwentyFourHours", False)
+        else:
+            is_24x7 = None
+        farmacies_with_time.append((point, is_24x7))
 
-    points_param = point_param + f"~{address_ll},pm2rdl"
-
-    show_map("ll={0}&spn={1}".format(address_ll, span), "map", add_params=points_param)
+    points_param = "pt=" + "~".join([
+        f'{point[0]},{point[1]},pm2{"gn" if is_24x7 else ("lb" if not is_24x7 else "gr")}l'
+        for point, is_24x7 in farmacies_with_time])
 
     show_map(map_type="map", add_params=points_param)
-
-    name = organization["properties"]["CompanyMetaData"]["name"]
-    address = organization["properties"]["CompanyMetaData"]["address"]
-    time = organization["properties"]["CompanyMetaData"]["Hours"]["text"]
-    distance = round(lonlat_distance((lon, lat), (org_lon, org_lat)))
-    snippet = f"Название:\t{name}\nАдрес:\t{address}\nВремя работы:\t{time}\n" \
-              f"Расстояние:\t{distance}м."
-    print(snippet)
 
 
 if __name__ == "__main__":
